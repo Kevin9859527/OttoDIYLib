@@ -25,11 +25,19 @@ void Otto::init(int YL, int YR, int RL, int RR, bool load_calibration, int Buzze
     }
   }
 
-  //Buzzer pin:
   pinBuzzer = Buzzer;
-  pinMode(Buzzer,OUTPUT);
+#ifndef OTTO_DISABLE_BUZZER
+  if (Buzzer >= 0) {
+    pinMode(Buzzer, OUTPUT);
+  }
+#endif
  
 }
+
+#ifdef OTTO_DISABLE_MATRIX
+void Otto::initMATRIX(int, int, int, int) {}
+void Otto::matrixIntensity(int) {}
+#else
 ///////////////////////////////////////////////////////
 void Otto::initMATRIX(int DIN, int CS, int CLK, int rotate){
 ledmatrix.init( DIN, CS, CLK, 1, rotate);   // set up Matrix display
@@ -37,6 +45,7 @@ ledmatrix.init( DIN, CS, CLK, 1, rotate);   // set up Matrix display
 void Otto::matrixIntensity(int intensity){
 ledmatrix.setIntensity(intensity);
 }
+#endif
 
 ///////////////////////////////////////////////////////////////////
 //-- ATTACH & DETACH FUNCTIONS ----------------------------------//
@@ -534,6 +543,13 @@ void Otto::flapping(float steps, int T, int h, int dir){
 ///////////////////////////////////////////////////////////////////
 //-- MOUTHS & ANIMATIONS ----------------------------------------//
 ///////////////////////////////////////////////////////////////////
+#ifdef OTTO_DISABLE_MATRIX
+void Otto::setLed(byte, byte, byte) {}
+void Otto::putAnimationMouth(unsigned long int, int) {}
+void Otto::putMouth(unsigned long int, bool) {}
+void Otto::clearMouth() {}
+void Otto::writeText(const char *, byte) {}
+#else
 void Otto::setLed(byte X, byte Y, byte value){
   ledmatrix.setDot( X,  Y, value);
 }
@@ -589,21 +605,23 @@ void Otto::writeText(const char * s, byte scrollspeed){
   }
 
 }
+#endif
 
 ///////////////////////////////////////////////////////////////////
 //-- SOUNDS -----------------------------------------------------//
 ///////////////////////////////////////////////////////////////////
 
 void Otto::_tone (float noteFrequency, long noteDuration, int silentDuration){
-
-    // tone(10,261,500);
-    // delay(500);
+      (void)noteFrequency;
 
       if(silentDuration==0){silentDuration=1;}
 
-      tone(Otto::pinBuzzer, noteFrequency, noteDuration);
-      delay(noteDuration);       //milliseconds to microseconds
-      //noTone(PIN_Buzzer);
+#ifndef OTTO_DISABLE_BUZZER
+      if (pinBuzzer >= 0) {
+        tone(pinBuzzer, noteFrequency, noteDuration);
+      }
+#endif
+      delay(noteDuration);
       delay(silentDuration);
 }
 

@@ -11,7 +11,9 @@
 #include "Otto_sounds.h"
 #include "Otto_gestures.h"
 #include "Otto_mouths.h"
+#ifndef OTTO_DISABLE_MATRIX
 #include "Otto_matrix.h"
+#endif
 
 //-- Constants
 #define FORWARD     1
@@ -91,7 +93,9 @@ class Otto
   private:
 
     Oscillator servo[4];
+#ifndef OTTO_DISABLE_MATRIX
     Otto_Matrix ledmatrix;
+#endif
     int servo_pins[4];
     int servo_trim[4];
 
