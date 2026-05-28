@@ -149,38 +149,42 @@ if (servoNumber == 3){
 }
 }
 
+// [3] 在约 T*cycle 毫秒内，让 4 个舵机按正弦规律同步摆动（阻塞）
 void Otto::oscillateServos(int A[4], int O[4], int T, double phase_diff[4], float cycle=1){
 
+  // 把振幅、偏移、周期、初相位写入 4 路振荡器
   for (int i=0; i<4; i++) {
-    servo[i].SetO(O[i]);
-    servo[i].SetA(A[i]);
-    servo[i].SetT(T);
-    servo[i].SetPh(phase_diff[i]);
+    servo[i].SetO(O[i]);           // 偏移 O：波形中心相对 90° 的偏移
+    servo[i].SetA(A[i]);           // 振幅 A：摆动幅度（度）
+    servo[i].SetT(T);              // 周期 T（ms），并重算每步相位增量 _inc
+    servo[i].SetPh(phase_diff[i]); // 初相位：腿/脚之间的相位差靠它区分
   }
-  double ref=millis();
+  double ref=millis();             // 记录开始时间
+  // 从开始到 ref+T*cycle：忙等循环，期间周期性刷新 4 个舵机
    for (double x=ref; x<=T*cycle+ref; x=millis()){
      for (int i=0; i<4; i++){
-        servo[i].refresh();
+        servo[i].refresh();      // 若到采样时刻则算 sin 并写 PWM
      }
   }
 }
 
+// [2] 通用步态执行器：按 steps 执行若干个完整周期 + 可能的小数尾部
 void Otto::_execute(int A[4], int O[4], int T, double phase_diff[4], float steps = 1.0){
 
-  attachServos();
+  attachServos();                  // 确保 4 路 PWM 舵机已 attach
   if(getRestState()==true){
-        setRestState(false);
+        setRestState(false);       // 标记为“运动中”，非休息
   }
 
 
-  int cycles=(int)steps;
+  int cycles=(int)steps;           // 完整周期个数（向下取整）
 
-  //-- Execute complete cycles
+  // 先执行整数个完整正弦周期，每次时长约 T ms
   if (cycles >= 1)
     for(int i = 0; i < cycles; i++)
       oscillateServos(A,O, T, phase_diff);
 
-  //-- Execute the final not complete cycle
+  // 若 steps 有小数（如 2.5），再执行剩余分数周期（cycle=0.5）
   oscillateServos(A,O, T, phase_diff,(float)steps-cycles);
 }
 
@@ -231,20 +235,17 @@ void Otto::jump(float steps, int T){
 //--    * T : Period
 //--    * Dir: Direction: FORWARD / BACKWARD
 //---------------------------------------------------------
+// [1] 走路：为四舵机设定“走姿”正弦参数，再交给 _execute 执行
+//     steps=走几个周期，T=单周期时长(ms)，dir=1前/-1后
 void Otto::walk(float steps, int T, int dir){
-  //-- Oscillator parameters for walking
-  //-- Hip sevos are in phase
-  //-- Feet servos are in phase
-  //-- Hip and feet are 90 degrees out of phase
-  //--      -90 : Walk forward
-  //--       90 : Walk backward
-  //-- Feet servos also have the same offset (for tiptoe a little bit)
+  // A[4]：振幅。索引 0左髋 1右髋 2左脚 3右脚
   int A[4]= {30, 30, 20, 20};
+  // O[4]：偏移。脚 ±4° 形成轻微踮脚/重心差
   int O[4] = {0, 0, 4, -4};
+  // 初相位：两髋同相(0)；两脚同相，且与髋差 90°；dir 决定前/后
   double phase_diff[4] = {0, 0, DEG2RAD(dir * -90), DEG2RAD(dir * -90)};
 
-  //-- Let's oscillate the servos!
-  _execute(A, O, T, phase_diff, steps);
+  _execute(A, O, T, phase_diff, steps);  // 真正摆动在此函数及其下层完成
 }
 
 //---------------------------------------------------------

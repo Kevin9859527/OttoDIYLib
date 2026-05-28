@@ -4,23 +4,23 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <Otto.h>
+#include <cctype>
+#include <esp_system.h>
 #include <cstdlib>
 #include <cstring>
 
 Otto Otto;
 
-// --- Servos (PWM) ---
-constexpr int PIN_LEFT_LEG = 7;
-constexpr int PIN_RIGHT_LEG = 8;
-constexpr int PIN_LEFT_FOOT = 9;
-// Otto 为四舵机；用户指定 7/8/9，第 4 路暂用 GPIO12，后续可改
-constexpr int PIN_RIGHT_FOOT = 12;
+// --- Servos (PWM): 左腿 / 右腿 / 左脚 / 右脚 ---
+constexpr int PIN_LEFT_LEG = 6;
+constexpr int PIN_RIGHT_LEG = 7;
+constexpr int PIN_LEFT_FOOT = 8;
+constexpr int PIN_RIGHT_FOOT = 9;
 
-// --- TFT eyes reserved (not initialized yet) ---
+// --- TFT eye reserved (single display, not initialized yet) ---
 constexpr int PIN_TFT_MOSI = 3;
 constexpr int PIN_TFT_DC = 4;
-constexpr int PIN_TFT_CS_LEFT = 5;
-constexpr int PIN_TFT_CS_RIGHT = 6;
+constexpr int PIN_TFT_CS = 5;
 
 // --- Command UART (no BLE fallback) ---
 constexpr int PIN_CMD_TX = 10;
@@ -43,6 +43,7 @@ bool bleConnected = false;
 char rxBuffer[COMMAND_BUFFER_SIZE] = {};
 char pendingCommand[COMMAND_BUFFER_SIZE] = {};
 size_t rxLength = 0;
+unsigned long lastRxByteAtMs = 0;
 volatile bool commandReady = false;
 portMUX_TYPE commandMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -56,9 +57,12 @@ void handleCommand(char *line);
 void moveRobot(int selectedMoveId);
 void appendCommandChar(char c);
 void configurePins();
+void initLog(const char *message);
+void printStartupCode();
+void finalizePendingCommand();
 
 constexpr int kUsedPins[] = {
-    PIN_TFT_MOSI, PIN_TFT_DC, PIN_TFT_CS_LEFT, PIN_TFT_CS_RIGHT,
+    PIN_TFT_MOSI, PIN_TFT_DC, PIN_TFT_CS,
     PIN_LEFT_LEG, PIN_RIGHT_LEG, PIN_LEFT_FOOT, PIN_RIGHT_FOOT,
     PIN_CMD_TX, PIN_CMD_RX,
 };
@@ -73,11 +77,10 @@ bool isUsedPin(int pin) {
 }
 
 void configurePins() {
-  // TFT 预留脚：高阻输入，避免与后续 SPI 屏冲突
+  // TFT 单眼预留脚：高阻输入，避免与后续 SPI 屏冲突
   pinMode(PIN_TFT_MOSI, INPUT);
   pinMode(PIN_TFT_DC, INPUT);
-  pinMode(PIN_TFT_CS_LEFT, INPUT);
-  pinMode(PIN_TFT_CS_RIGHT, INPUT);
+  pinMode(PIN_TFT_CS, INPUT);
 
   // 其余未使用 GPIO：高阻输入
   for (int pin = 0; pin <= 21; ++pin) {
@@ -89,35 +92,45 @@ void configurePins() {
 
 void appendCommandChar(char c) {
   if (c == '\r' || c == '\n') {
-    if (rxLength == 0) {
-      return;
-    }
-
-    portENTER_CRITICAL(&commandMux);
-    if (!commandReady) {
-      memcpy(pendingCommand, rxBuffer, rxLength);
-      pendingCommand[rxLength] = '\0';
-      commandReady = true;
-    }
-    portEXIT_CRITICAL(&commandMux);
-
-    rxLength = 0;
-    rxBuffer[0] = '\0';
+    finalizePendingCommand();
     return;
   }
 
   if (rxLength < COMMAND_BUFFER_SIZE - 1) {
     rxBuffer[rxLength++] = c;
     rxBuffer[rxLength] = '\0';
+    lastRxByteAtMs = millis();
   } else {
     rxLength = 0;
     rxBuffer[0] = '\0';
   }
 }
 
+void finalizePendingCommand() {
+  if (rxLength == 0) {
+    return;
+  }
+
+  portENTER_CRITICAL(&commandMux);
+  if (!commandReady) {
+    memcpy(pendingCommand, rxBuffer, rxLength);
+    pendingCommand[rxLength] = '\0';
+    commandReady = true;
+  }
+  portEXIT_CRITICAL(&commandMux);
+
+  rxLength = 0;
+  rxBuffer[0] = '\0';
+}
+
 void pollCommandUart() {
   while (CmdSerial.available() > 0) {
     appendCommandChar(static_cast<char>(CmdSerial.read()));
+  }
+
+  // 兼容部分串口工具未发送 CR/LF：超时后自动提交
+  if (rxLength > 0 && (millis() - lastRxByteAtMs) > 40) {
+    finalizePendingCommand();
   }
 }
 
@@ -166,6 +179,18 @@ void replyLine(const char *message) {
     txCharacteristic->setValue(reinterpret_cast<uint8_t *>(line), strlen(line));
     txCharacteristic->notify();
   }
+}
+
+void initLog(const char *message) {
+  Serial.println(message);
+  CmdSerial.println(message);
+}
+
+void printStartupCode() {
+  const uint32_t startupCode = esp_random();
+  char line[48];
+  snprintf(line, sizeof(line), "STARTUP-CODE:%08lX", static_cast<unsigned long>(startupCode));
+  initLog(line);
 }
 
 void sendAck() {
@@ -330,7 +355,8 @@ void handleCommand(char *line) {
   Serial.print(F("Command: "));
   Serial.println(token);
 
-  switch (token[0]) {
+  const char cmd = static_cast<char>(toupper(static_cast<unsigned char>(token[0])));
+  switch (cmd) {
     case 'S': receiveStop(); break;
     case 'L': receiveLED(&context); break;
     case 'T': receiveBuzzer(&context); break;
@@ -373,6 +399,11 @@ void moveRobot(int selectedMoveId) {
 
   if (!manualMode) {
     sendFinalAck();
+    // 单次执行：动作结束后回中位，避免 loop 反复 moveRobot(moveId)
+    if (selectedMoveId != 0) {
+      Otto.home();
+      moveId = 0;
+    }
   }
 }
 
@@ -413,6 +444,9 @@ void setup() {
   delay(300);
 
   CmdSerial.begin(CMD_UART_BAUD, SERIAL_8N1, PIN_CMD_RX, PIN_CMD_TX);
+  initLog("UART1 init: OK");
+  initLog("UART1 pins: TX=GPIO10 RX=GPIO11 BAUD=115200");
+  printStartupCode();
 
   Otto.init(PIN_LEFT_LEG, PIN_RIGHT_LEG, PIN_LEFT_FOOT, PIN_RIGHT_FOOT, false,
             PIN_BUZZER_DISABLED);
@@ -422,11 +456,11 @@ void setup() {
 
   Otto.home();
 
-  Serial.println(F("Otto ESP32-S3 ready"));
-  Serial.println(F("  Log: USB Serial @ 115200"));
-  Serial.println(F("  Cmd: UART1 GPIO10=TX GPIO11=RX @ 115200"));
-  Serial.println(F("  Matrix: disabled (TFT eyes planned)"));
-  Serial.println(F("  Buzzer: disabled"));
+  initLog("Otto ESP32-S3 ready");
+  initLog("  Log: USB Serial @ 115200");
+  initLog("  Cmd: UART1 GPIO10=TX GPIO11=RX @ 115200");
+  initLog("  Matrix: disabled (TFT eye GPIO3/4/5 planned)");
+  initLog("  Buzzer: disabled");
 }
 
 void loop() {

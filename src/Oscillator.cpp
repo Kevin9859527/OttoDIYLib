@@ -104,42 +104,40 @@ void Oscillator::SetPosition(int position)
 /* in order to maintain the oscillations. It calculates            */
 /* if another sample should be taken and position the servo if so  */
 /*******************************************************************/
+// [4] 振荡器刷新：每隔 _samplingPeriod(约30ms) 采样一次正弦并更新舵机
 void Oscillator::refresh()
 {
   
-  //-- Only When TS milliseconds have passed, the new sample is obtained
-  if (next_sample()) {
+  if (next_sample()) {             // 距上次采样是否已过约 30ms
   
-      //-- If the oscillator is not stopped, calculate the servo position
-      if (!_stop) {
-        //-- Sample the sine function and set the servo pos
+      if (!_stop) {                // 未暂停时才输出新角度
+         // 相对中位 90° 的偏移 = A*sin(相位+初相) + O
          int pos = round(_amplitude * sin(_phase + _phase0) + _offset);
-	       if (_rev) pos=-pos;
-         write(pos+90);
+	       if (_rev) pos=-pos;     // 反向安装时翻转符号
+         write(pos+90);            // 转成绝对角 0~180 并写入（含限速）
       }
 
-      //-- Increment the phase
-      //-- It is always increased, even when the oscillator is stop
-      //-- so that the coordination is always kept
-      _phase = _phase + _inc;
+      _phase = _phase + _inc;      // 相位前进一小步，下一采样点沿正弦前移
 
   }
 }
 
+// [5] 把目标角度写到舵机：可限速，最后 PWM 输出
 void Oscillator::write(int position) 
 {
   long currentMillis = millis();
-  if (_diff_limit > 0) {
+  if (_diff_limit > 0) {           // 若启用了度/秒限速（enableServoLimit）
+    // 根据距上次命令的时间，算本步允许的最大角度变化
     int limit =  max(1,(((int)(currentMillis - _previousServoCommandMillis)) * _diff_limit) / 1000);
     if (abs(position - _pos) > limit) {
-      _pos += position < _pos ? -limit : limit;
+      _pos += position < _pos ? -limit : limit;  // 目标太远则只走 limit 那么多
     } else {
-      _pos = position;
+      _pos = position;             // 在允许范围内则直接到位
     }
   }
   else {
-      _pos = position;
+      _pos = position;             // 无限速则直接采用目标角
   }    
   _previousServoCommandMillis = currentMillis;
-  _servo.write(_pos + _trim);
+  _servo.write(_pos + _trim);      // 加校准偏移后输出 PWM（开环，无反馈）
 }

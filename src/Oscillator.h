@@ -8,6 +8,15 @@
 #ifndef Oscillator_h
 #define Oscillator_h
 
+// Servo backend selection (default to PWM for backward compatibility)
+#if defined(OTTO_SERVO_BACKEND_PWM) && defined(OTTO_SERVO_BACKEND_D031_UART)
+#error "Only one servo backend can be enabled"
+#endif
+
+#if !defined(OTTO_SERVO_BACKEND_PWM) && !defined(OTTO_SERVO_BACKEND_D031_UART)
+#define OTTO_SERVO_BACKEND_PWM
+#endif
+
 #ifdef ARDUINO_ARCH_ESP32
 #include <ESP32Servo.h>
 #else

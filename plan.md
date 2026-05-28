@@ -23,14 +23,13 @@
 
 | 功能 | GPIO | 状态 |
 | --- | --- | --- |
-| 左腿舵机 | 7 | 已用 |
-| 右腿舵机 | 8 | 已用 |
-| 左脚舵机 | 9 | 已用 |
-| 右脚舵机 | 12 | 已用（第 4 路，待确认） |
-| TFT MOSI | 3 | 预留 INPUT |
-| TFT DC | 4 | 预留 INPUT |
-| TFT CS 左眼 | 5 | 预留 INPUT |
-| TFT CS 右眼 | 6 | 预留 INPUT |
+| 左腿舵机 | 6 | 已用 |
+| 右腿舵机 | 7 | 已用 |
+| 左脚舵机 | 8 | 已用 |
+| 右脚舵机 | 9 | 已用 |
+| TFT MOSI | 3 | 预留 INPUT（单眼） |
+| TFT DC | 4 | 预留 INPUT（单眼） |
+| TFT CS | 5 | 预留 INPUT（单眼） |
 | 命令 UART TX | 10 | UART1 |
 | 命令 UART RX | 11 | UART1 |
 | USB 日志 | 内置 CDC | 115200 |
@@ -76,7 +75,7 @@
 - 舵机 trim 偏移
 - 舵机命令速度限制
 
-点阵底层已屏蔽（`OTTO_DISABLE_MATRIX`），`putMouth()` 等为空操作，待接 TFT 双眼。
+点阵底层已屏蔽（`OTTO_DISABLE_MATRIX`），`putMouth()` 等为空操作，待接 TFT 单眼（GPIO3/4/5）。
 
 ## 当前主程序已实际接入的功能
 
@@ -172,8 +171,8 @@
 - EEPROM/Preferences 持久化：当前 `C` 命令只设置 RAM trim，重启丢失。
 - ESP32-S3R8 PSRAM 实际识别：当前配置已加入 PSRAM 相关项，但 PlatformIO 输出仍显示板卡定义为 `No PSRAM`，需要按实际开发板进一步校准。
 - BLE / UART 命令兼容性测试。
-- 舵机 GPIO7/8/9/12 方向与 trim 实机确认；若只需 3 路舵机请改接线定义。
-- SPI TFT 双眼驱动接入（GPIO3/4/5/6）。
+- 舵机 GPIO6/7/8/9 方向与 trim 实机确认。
+- SPI TFT 单眼驱动接入（GPIO3/4/5）。
 - 小智 AI 喇叭播放，替代蜂鸣器 `K`/`T` 命令语义。
 - 按键功能：当前只配置了 `PIN_BUTTON`，尚未实现按钮模式切换。
 - 装配/使能检测脚：当前只配置了 `PIN_ASSEMBLY`，尚未恢复原 App 固件中的装配等待逻辑。
