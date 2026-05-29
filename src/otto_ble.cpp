@@ -8,6 +8,9 @@
 #include <esp_system.h>
 #include <cstdlib>
 #include <cstring>
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+#include "D031ServoBus.h"
+#endif
 
 Otto Otto;
 
@@ -28,6 +31,16 @@ constexpr int PIN_CMD_RX = 11;
 constexpr uint32_t CMD_UART_BAUD = 115200;
 
 constexpr int PIN_BUZZER_DISABLED = -1;
+
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+constexpr int PIN_SERVO_BUS_IO = 8;
+constexpr uint32_t SERVO_BUS_BAUD = 115200;
+constexpr uint8_t SERVO_BUS_DEFAULT_SPEED = 50;
+constexpr bool D031_TEST_MODE = true;
+HardwareSerial ServoBusSerial(2);
+D031ServoBus ServoBus;
+bool servoBusReady = false;
+#endif
 
 constexpr char BLE_DEVICE_NAME[] = "OttoDIY-BLE";
 constexpr char BLE_SERVICE_UUID[] = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -60,11 +73,20 @@ void configurePins();
 void initLog(const char *message);
 void printStartupCode();
 void finalizePendingCommand();
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+void receiveUartServo(char **context);
+void initServoBus();
+bool isD031TestMode();
+bool isOttoCommandDisabledInTestMode(char cmd);
+#endif
 
 constexpr int kUsedPins[] = {
     PIN_TFT_MOSI, PIN_TFT_DC, PIN_TFT_CS,
     PIN_LEFT_LEG, PIN_RIGHT_LEG, PIN_LEFT_FOOT, PIN_RIGHT_FOOT,
     PIN_CMD_TX, PIN_CMD_RX,
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+    PIN_SERVO_BUS_IO,
+#endif
 };
 
 bool isUsedPin(int pin) {
@@ -345,6 +367,118 @@ void receiveSing(char **context) {
   sendFinalAck();
 }
 
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+void initServoBus() {
+  servoBusReady = ServoBus.begin(ServoBusSerial, PIN_SERVO_BUS_IO, SERVO_BUS_BAUD);
+  if (servoBusReady) {
+    initLog("D031 bus init: OK");
+    initLog("  Bus: UART2 single-wire GPIO8 @ 115200");
+  } else {
+    initLog("D031 bus init: FAIL");
+  }
+}
+
+bool isD031TestMode() {
+  return D031_TEST_MODE;
+}
+
+bool isOttoCommandDisabledInTestMode(char cmd) {
+  return cmd != 'U';
+}
+
+void receiveUartServo(char **context) {
+  sendAck();
+  char *op = nextArg(context);
+  if (op == nullptr) {
+    initLog("U usage: U I | U P <id> | U E <id> <0|1> | U W <id> <target> <speed> | U R <id>");
+    sendFinalAck();
+    return;
+  }
+
+  const char action = static_cast<char>(toupper(static_cast<unsigned char>(op[0])));
+  if (action == 'I') {
+    initServoBus();
+    sendFinalAck();
+    return;
+  }
+
+  if (!servoBusReady) {
+    initLog("U: bus not ready, run 'U I' first");
+    sendFinalAck();
+    return;
+  }
+
+  int id = 0;
+  if (!parseIntArg(context, id) || id < 1 || id > 252) {
+    initLog("U: invalid id (1..252)");
+    sendFinalAck();
+    return;
+  }
+
+  char line[96];
+  if (action == 'P') {
+    uint8_t status = 0;
+    const bool ok = ServoBus.ping(static_cast<uint8_t>(id), &status);
+    snprintf(line, sizeof(line), "U P id=%d %s status=0x%02X", id, ok ? "OK" : "FAIL", status);
+    initLog(line);
+    sendFinalAck();
+    return;
+  }
+
+  if (action == 'E') {
+    int enable = 0;
+    if (!parseIntArg(context, enable)) {
+      initLog("U E: missing enable (0/1)");
+      sendFinalAck();
+      return;
+    }
+    uint8_t status = 0;
+    const bool ok = ServoBus.enableTorque(static_cast<uint8_t>(id), enable != 0, &status);
+    snprintf(line, sizeof(line), "U E id=%d en=%d %s status=0x%02X", id, enable != 0 ? 1 : 0, ok ? "OK" : "FAIL", status);
+    initLog(line);
+    sendFinalAck();
+    return;
+  }
+
+  if (action == 'W') {
+    int target = 0;
+    int speed = SERVO_BUS_DEFAULT_SPEED;
+    if (!parseIntArg(context, target)) {
+      initLog("U W: missing target (-700..700)");
+      sendFinalAck();
+      return;
+    }
+    if (target < -700) target = -700;
+    if (target > 700) target = 700;
+    if (!parseIntArg(context, speed)) {
+      speed = SERVO_BUS_DEFAULT_SPEED;
+    }
+    if (speed < 0) speed = 0;
+    if (speed > 100) speed = 100;
+
+    uint8_t status = 0;
+    const bool ok = ServoBus.writeTarget(static_cast<uint8_t>(id), static_cast<int16_t>(target), static_cast<uint8_t>(speed), &status);
+    snprintf(line, sizeof(line), "U W id=%d target=%d speed=%d %s status=0x%02X", id, target, speed, ok ? "OK" : "FAIL", status);
+    initLog(line);
+    sendFinalAck();
+    return;
+  }
+
+  if (action == 'R') {
+    int16_t pos = 0;
+    uint8_t status = 0;
+    const bool ok = ServoBus.readPosition(static_cast<uint8_t>(id), pos, &status);
+    snprintf(line, sizeof(line), "U R id=%d pos=%d %s status=0x%02X", id, static_cast<int>(pos), ok ? "OK" : "FAIL", status);
+    initLog(line);
+    sendFinalAck();
+    return;
+  }
+
+  initLog("U: unknown action");
+  sendFinalAck();
+}
+#endif
+
 void handleCommand(char *line) {
   char *context = nullptr;
   char *token = strtok_r(line, " ", &context);
@@ -356,6 +490,14 @@ void handleCommand(char *line) {
   Serial.println(token);
 
   const char cmd = static_cast<char>(toupper(static_cast<unsigned char>(token[0])));
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+  if (isD031TestMode() && isOttoCommandDisabledInTestMode(cmd)) {
+    sendAck();
+    initLog("D031 test mode: Otto PWM motion path disabled; use U commands only");
+    sendFinalAck();
+    return;
+  }
+#endif
   switch (cmd) {
     case 'S': receiveStop(); break;
     case 'L': receiveLED(&context); break;
@@ -365,6 +507,9 @@ void handleCommand(char *line) {
     case 'K': receiveSing(&context); break;
     case 'C': receiveTrims(&context); break;
     case 'G': receiveServo(&context); break;
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+    case 'U': receiveUartServo(&context); break;
+#endif
     default: receiveStop(); break;
   }
 }
@@ -447,20 +592,44 @@ void setup() {
   initLog("UART1 init: OK");
   initLog("UART1 pins: TX=GPIO10 RX=GPIO11 BAUD=115200");
   printStartupCode();
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+  initServoBus();
+#endif
 
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+  if (!isD031TestMode()) {
+    Otto.init(PIN_LEFT_LEG, PIN_RIGHT_LEG, PIN_LEFT_FOOT, PIN_RIGHT_FOOT, false,
+              PIN_BUZZER_DISABLED);
+    Otto.enableServoLimit();
+  }
+#else
   Otto.init(PIN_LEFT_LEG, PIN_RIGHT_LEG, PIN_LEFT_FOOT, PIN_RIGHT_FOOT, false,
             PIN_BUZZER_DISABLED);
   Otto.enableServoLimit();
+#endif
 
   setupBle();
 
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+  if (!isD031TestMode()) {
+    Otto.home();
+  }
+#else
   Otto.home();
+#endif
 
   initLog("Otto ESP32-S3 ready");
   initLog("  Log: USB Serial @ 115200");
   initLog("  Cmd: UART1 GPIO10=TX GPIO11=RX @ 115200");
   initLog("  Matrix: disabled (TFT eye GPIO3/4/5 planned)");
   initLog("  Buzzer: disabled");
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+  initLog("  ServoBus test cmd: U I|P|E|W|R");
+  if (isD031TestMode()) {
+    initLog("  D031 test mode: Otto PWM init disabled");
+    initLog("  PWM channels GPIO6/7/8/9 are not attached in this mode");
+  }
+#endif
 }
 
 void loop() {
@@ -480,7 +649,15 @@ void loop() {
     handleCommand(command);
   }
 
+#ifdef OTTO_SERVO_BACKEND_D031_UART
+  if (!isD031TestMode()) {
+    if (!Otto.getRestState()) {
+      moveRobot(moveId);
+    }
+  }
+#else
   if (!Otto.getRestState()) {
     moveRobot(moveId);
   }
+#endif
 }
